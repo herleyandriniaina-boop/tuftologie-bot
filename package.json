@@ -1,0 +1,17 @@
+{
+  "name": "tuftologie-bot",
+  "version": "1.0.0",
+  "description": "Bot Messenger IA pour Tuftologie by Say Kim",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
