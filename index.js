@@ -5,19 +5,18 @@ const app = express();
 app.use(express.json());
 
 // ============================================================
-//  CONFIG — remplace ces valeurs dans Railway (Variables)
+//  CONFIG — variables Railway
 // ============================================================
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VERIFY_TOKEN      = process.env.VERIFY_TOKEN;       // mot de passe que tu choisis toi-même
-const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
+const VERIFY_TOKEN      = process.env.VERIFY_TOKEN;
+const GROQ_API_KEY      = process.env.GROQ_API_KEY;
 // ============================================================
 
-// Mémoire courte : garde les 6 derniers messages par utilisateur
+// Mémoire courte : garde les 6 derniers échanges par utilisateur
 const conversations = {};
 
 // ── SYSTEM PROMPT ─────────────────────────────────────────────
-const SYSTEM_PROMPT = `
-Tu es l'assistante virtuelle de "Tuftologie by Say Kim", une boutique artisanale spécialisée dans les tapis tufting faits à la main, basée à Antananarivo, Madagascar.
+const SYSTEM_PROMPT = `Tu es l'assistante virtuelle de "Tuftologie by Say Kim", une boutique artisanale spécialisée dans les tapis tufting faits à la main, basée à Antananarivo, Madagascar.
 
 LANGUE :
 - Détecte automatiquement la langue du client (malgache ou français).
@@ -35,17 +34,16 @@ INFOS SUR LA BOUTIQUE :
 - Produits : tapis tufting artisanaux personnalisés (anime, gaming, foot, custom)
 - Designs populaires : One Piece, Naruto, ROG, PSG, Real Madrid, Barcelona, Bayern
 - Prix : sur devis selon taille et design (demander les dimensions et le motif)
-- Paiement : MVola / Orange Money
-- Livraison : disponible à Antananarivo
+- Paiement : MVola / Orange Money / Airtel Money
+- Livraison : disponible dans toute l'île de Madagascar
 - Commande : via message direct, envoyer dimensions + motif souhaité
 
 RÈGLES :
 - Si on demande un prix exact, dis que le prix dépend de la taille et du design, et demande les dimensions (ex: 60x90cm) et le motif.
 - Si on demande si un design est possible, dis OUI et invite à envoyer une photo de référence.
-- Si on demande le délai, dis "environ 7 à 14 jours selon la complexité".
+- Si on demande le délai, dis "environ 7 à 14 jours ouvrables selon la complexité".
 - Ne jamais donner de prix fixe sans connaître les dimensions.
-- Si la question est trop complexe ou hors sujet boutique, dis poliment que Say Kim va répondre personnellement.
-`;
+- Si la question est trop complexe ou hors sujet boutique, dis poliment que Say Kim va répondre personnellement.`;
 
 // ── WEBHOOK VERIFICATION ──────────────────────────────────────
 app.get("/webhook", (req, res) => {
@@ -72,7 +70,6 @@ app.post("/webhook", async (req, res) => {
 
       const senderId = event.sender.id;
 
-      // Ignorer les messages envoyés PAR la page elle-même
       if (event.message?.is_echo) continue;
 
       if (event.message?.text) {
@@ -80,16 +77,11 @@ app.post("/webhook", async (req, res) => {
         console.log(`📩 Message reçu de ${senderId}: ${userMessage}`);
 
         try {
-          // Envoyer "typing..." pendant que l'IA réfléchit
           await sendTyping(senderId);
-
-          // Appeler Gemini
-          const reply = await callGemini(senderId, userMessage);
-
-          // Envoyer la réponse
+          const reply = await callGroq(senderId, userMessage);
           await sendMessage(senderId, reply);
         } catch (err) {
-          console.error("❌ Erreur:", err.message);
+          console.error("❌ Erreur:", err.response?.data || err.message);
           await sendMessage(senderId, "Azafady, misy olana kely. Avereno ny hafatrao afaka fotoana kely. 🙏");
         }
       }
@@ -100,49 +92,47 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ── APPEL GEMINI API ──────────────────────────────────────────
-async function callGemini(userId, userMessage) {
-  // Initialiser l'historique si nouveau user
+// ── APPEL GROQ API ────────────────────────────────────────────
+async function callGroq(userId, userMessage) {
   if (!conversations[userId]) {
     conversations[userId] = [];
   }
 
-  // Ajouter le message de l'utilisateur
   conversations[userId].push({
     role: "user",
-    parts: [{ text: userMessage }]
+    content: userMessage
   });
 
-  // Garder seulement les 6 derniers échanges (mémoire courte)
   if (conversations[userId].length > 12) {
     conversations[userId] = conversations[userId].slice(-12);
   }
 
-  const payload = {
-    system_instruction: {
-      parts: [{ text: SYSTEM_PROMPT }]
-    },
-    contents: conversations[userId],
-    generationConfig: {
-      maxOutputTokens: 300,
-      temperature: 0.7,
-    }
-  };
-
   const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    payload,
-    { headers: { "Content-Type": "application/json" } }
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        ...conversations[userId]
+      ],
+      max_tokens: 300,
+      temperature: 0.7
+    },
+    {
+      headers: {
+        "Authorization": `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
   );
 
-  const reply = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const reply = response.data.choices?.[0]?.message?.content;
 
-  if (!reply) throw new Error("Gemini n'a pas retourné de réponse");
+  if (!reply) throw new Error("Groq n'a pas retourné de réponse");
 
-  // Sauvegarder la réponse dans l'historique
   conversations[userId].push({
-    role: "model",
-    parts: [{ text: reply }]
+    role: "assistant",
+    content: reply
   });
 
   return reply;
